@@ -1,0 +1,49 @@
+FROM node:20-alpine AS base
+ 
+FROM base AS builder
+RUN apk update
+RUN apk add --no-cache libc6-compat
+# Set working directory
+WORKDIR /app
+# Replace <your-major-version> with the major version installed in your repository. For example:
+# RUN yarn global add turbo@^2
+RUN npm i -g turbo@2
+COPY . .
+ 
+# Generate a partial monorepo with a pruned lockfile for a target workspace.
+# Assuming "web" is the name entered in the project's package.json: { name: "web" }
+RUN turbo prune web --docker
+ 
+# Add lockfile and package.json's of isolated subworkspace
+FROM base AS installer
+RUN apk update
+RUN apk add --no-cache libc6-compat
+WORKDIR /app
+ 
+# First install the dependencies (as they change less often)
+COPY .gitignore .gitignore
+COPY --from=builder /app/out/json/ .
+COPY --from=builder /app/out/pnpm-lock.yaml ./pnpm-lock.yaml
+RUN npm i -g turbo@2 pnpm
+RUN pnpm install
+ 
+# Build the project
+COPY --from=builder /app/out/full/ .
+RUN turbo run build --filter=web
+ 
+FROM base AS runner
+WORKDIR /app
+
+COPY --from=installer /app/apps/web/package.json .
+COPY --from=installer /app/apps/web/pnpm-lock.yaml .
+COPY --from=installer /app/apps/web/build ./build
+
+ARG FOO
+ENV FOO = $FOO
+
+ARG ORIGIN
+ENV ORIGIN = $ORIGIN
+
+EXPOSE 3000
+
+CMD node build
